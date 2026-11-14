@@ -14,6 +14,7 @@ pub enum ArenaError {
     SpawnOutOfArena(Spawn),
 }
 
+#[derive(Clone, Debug)]
 pub struct Arena {
     grid: Grid<u8>,
     spawns: Vec<Spawn>,
