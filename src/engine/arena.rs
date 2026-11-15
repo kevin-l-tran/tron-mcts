@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::action::Direction;
 use super::grid::Grid;
 
@@ -10,21 +12,32 @@ pub struct Spawn {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ArenaError {
-    InvalidRocksArray,
     SpawnOutOfArena(Spawn),
+    SpawnOnObstacle(Spawn),
+    DuplicateSpawnLocation(Spawn),
 }
 
 #[derive(Clone, Debug)]
 pub struct Arena {
-    grid: Grid<u8>,
+    grid: Grid<bool>,
     spawns: Vec<Spawn>,
 }
 
 impl Arena {
-    pub fn new(grid: Grid<u8>, spawns: Vec<Spawn>) -> Result<Arena, ArenaError> {
+    pub fn new(grid: Grid<bool>, spawns: Vec<Spawn>) -> Result<Arena, ArenaError> {
+        let mut spawn_locations: HashSet<(usize, usize)> = HashSet::new();
+
         for spawn in &spawns {
-            if !grid.in_bounds(spawn.x, spawn.y) {
-                return Err(ArenaError::SpawnOutOfArena(*spawn));
+            let is_obstacle = grid.get(spawn.x, spawn.y);
+
+            match is_obstacle {
+                None => return Err(ArenaError::SpawnOutOfArena(*spawn)),
+                Some(true) => return Err(ArenaError::SpawnOnObstacle(*spawn)),
+                Some(false) => {}
+            }
+
+            if !spawn_locations.insert((spawn.x, spawn.y)) {
+                return Err(ArenaError::DuplicateSpawnLocation(*spawn));
             }
         }
 
