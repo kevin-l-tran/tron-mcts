@@ -25,6 +25,7 @@ pub enum GameStateError {
     SpawnOnObstacle(Spawn),
     DuplicateSpawnLocation(Spawn, Spawn),
     TooManyPlayers(usize),
+    InvalidPlayerIndex(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,8 +85,39 @@ impl GameState {
         })
     }
 
-    pub fn legal_actions() -> Direction {
-        todo!()
+    pub fn legal_actions(&self, id: usize) -> Result<Vec<Direction>, GameStateError> {
+        let player = match self.players.get(id) {
+            Some(player) => player,
+            None => return Err(GameStateError::InvalidPlayerIndex(id)),
+        };
+
+        if player.eliminated_at.is_some() {
+            return Ok(vec![]);
+        }
+
+        let mut legal_directions = vec![];
+
+        for direction in Direction::VALUES {
+            if direction == -player.direction {
+                continue;
+            }
+
+            let (dx, dy) = direction.delta();
+            let Some(player_x) = player.x.checked_add_signed(dx) else {
+                continue;
+            };
+            let Some(player_y) = player.y.checked_add_signed(dy) else {
+                continue;
+            };
+
+            if !self.arena.in_bounds(player_x, player_y) || self.is_occupied(player_x, player_y) {
+                continue;
+            }
+
+            legal_directions.push(direction);
+        }
+
+        Ok(legal_directions)
     }
 
     pub fn alive_players() -> Vec<PlayerState> {
@@ -119,6 +151,10 @@ impl GameState {
     fn set_trail(&mut self, x: usize, y: usize, id: usize) {
         debug_assert!(id < self.players.len());
         self.trails[(x, y)] = (id + 1) as u8;
+    }
+
+    fn is_occupied(&self, x: usize, y: usize) -> bool {
+        self.trails[(x, y)] != 0 || self.arena[(x, y)]
     }
 }
 
@@ -167,7 +203,7 @@ mod tests {
                         direction: South,
                         eliminated_at: None,
                     }
-                )
+                );
             }
         }
 
@@ -205,7 +241,7 @@ mod tests {
             let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
 
             for index in 0..num_players as usize {
-                assert_eq!(game_state.trails[(index, index)], index as u8 + 1)
+                assert_eq!(game_state.trails[(index, index)], index as u8 + 1);
             }
         }
 
@@ -262,7 +298,7 @@ mod tests {
                 assert_eq!(
                     GameState::new(Arc::clone(&arena), spawns),
                     Err(GameStateError::SpawnOutOfArena(outside_spawn)),
-                )
+                );
             }
         }
 
@@ -282,7 +318,7 @@ mod tests {
             assert_eq!(
                 GameState::new(Arc::new(arena), spawns),
                 Err(GameStateError::SpawnOnObstacle(obstacle_spawn)),
-            )
+            );
         }
 
         #[test]
@@ -306,7 +342,144 @@ mod tests {
             assert_eq!(
                 GameState::new(Arc::new(arena), spawns),
                 Err(GameStateError::DuplicateSpawnLocation(spawn_1, spawn_2)),
-            )
+            );
+        }
+    }
+
+    mod legal_actions {
+        use crate::engine::action::Direction::{East, North, South, West};
+
+        use super::*;
+
+        #[test]
+        fn returns_all_valid_directions() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![Spawn {
+                x: 1,
+                y: 1,
+                direction: South,
+            }];
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert_eq!(game_state.legal_actions(0).unwrap(), [South, East, West]);
+        }
+
+        #[test]
+        fn does_not_include_backwards_direction() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![Spawn {
+                x: 1,
+                y: 1,
+                direction: South,
+            }];
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert!(!game_state.legal_actions(0).unwrap().contains(&North));
+        }
+
+        #[test]
+        fn does_not_include_directions_going_out_of_arena() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![Spawn {
+                x: 1,
+                y: 0,
+                direction: East,
+            }];
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert!(!game_state.legal_actions(0).unwrap().contains(&North));
+        }
+
+        #[test]
+        fn does_not_include_directions_going_into_arena_obstacle() {
+            let mut arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![Spawn {
+                x: 1,
+                y: 1,
+                direction: South,
+            }];
+
+            arena[(2, 1)] = true;
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert!(!game_state.legal_actions(0).unwrap().contains(&East));
+        }
+
+        #[test]
+        fn does_not_include_directions_going_into_trails() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![
+                Spawn {
+                    x: 1,
+                    y: 1,
+                    direction: South,
+                },
+                Spawn {
+                    x: 2,
+                    y: 2,
+                    direction: South,
+                },
+            ];
+
+            let mut game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            game_state.trails[(0, 1)] = 1;
+            game_state.trails[(2, 1)] = 2;
+
+            assert!(!game_state.legal_actions(0).unwrap().contains(&East));
+            assert!(!game_state.legal_actions(0).unwrap().contains(&West));
+        }
+
+        #[test]
+        fn returns_empty_array_for_trapped_player() {
+            let mut arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![Spawn {
+                x: 1,
+                y: 1,
+                direction: South,
+            }];
+
+            arena[(0, 1)] = true;
+            arena[(1, 0)] = true;
+            arena[(2, 1)] = true;
+            arena[(1, 2)] = true;
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert_eq!(game_state.legal_actions(0).unwrap(), []);
+        }
+
+        #[test]
+        fn returns_empty_array_for_dead_player() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![Spawn {
+                x: 0,
+                y: 0,
+                direction: South,
+            }];
+
+            let mut game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            game_state.players[0].eliminated_at = Some(0);
+
+            assert_eq!(game_state.legal_actions(0), Ok(vec![]));
+        }
+
+        #[test]
+        fn rejects_invalid_player_id() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![];
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert_eq!(
+                game_state.legal_actions(0),
+                Err(GameStateError::InvalidPlayerIndex(0))
+            );
         }
     }
 }
