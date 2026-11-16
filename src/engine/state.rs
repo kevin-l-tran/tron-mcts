@@ -13,10 +13,10 @@ pub struct Spawn {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct PlayerState {
-    x: usize,
-    y: usize,
-    direction: Direction,
-    eliminated_at: Option<usize>,
+    pub x: usize,
+    pub y: usize,
+    pub direction: Direction,
+    pub eliminated_at: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -30,11 +30,11 @@ pub enum GameStateError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameState {
-    arena: Arc<Arena>,
-    players: Vec<PlayerState>,
-    trails: Grid<u8>,
-    tick: usize,
-    alive_count: usize,
+    pub arena: Arc<Arena>,
+    pub players: Vec<PlayerState>,
+    pub trails: Grid<u8>,
+    pub tick: usize,
+    pub alive_count: usize,
 }
 
 impl GameState {
@@ -120,8 +120,11 @@ impl GameState {
         Ok(legal_directions)
     }
 
-    pub fn alive_players() -> Vec<PlayerState> {
-        todo!()
+    pub fn alive_players(&self) -> impl Iterator<Item = (usize, &PlayerState)> + '_ {
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|p| p.1.eliminated_at.is_none())
     }
 
     pub fn step() {
@@ -480,6 +483,130 @@ mod tests {
                 game_state.legal_actions(0),
                 Err(GameStateError::InvalidPlayerIndex(0))
             );
+        }
+    }
+
+    mod alive_players {
+        use crate::engine::action::Direction::South;
+
+        use super::*;
+
+        #[test]
+        fn returns_all_when_none_eliminated() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![
+                Spawn {
+                    x: 0,
+                    y: 0,
+                    direction: South,
+                },
+                Spawn {
+                    x: 1,
+                    y: 1,
+                    direction: South,
+                },
+                Spawn {
+                    x: 2,
+                    y: 2,
+                    direction: South,
+                },
+                Spawn {
+                    x: 3,
+                    y: 3,
+                    direction: South,
+                },
+            ];
+
+            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            assert_eq!(
+                game_state
+                    .alive_players()
+                    .map(|(i, _)| i)
+                    .collect::<Vec<usize>>(),
+                vec![0, 1, 2, 3]
+            )
+        }
+
+        #[test]
+        fn returns_only_alive_players() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![
+                Spawn {
+                    x: 0,
+                    y: 0,
+                    direction: South,
+                },
+                Spawn {
+                    x: 1,
+                    y: 1,
+                    direction: South,
+                },
+                Spawn {
+                    x: 2,
+                    y: 2,
+                    direction: South,
+                },
+                Spawn {
+                    x: 3,
+                    y: 3,
+                    direction: South,
+                },
+            ];
+
+            let mut game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            game_state.players[2].eliminated_at = Some(0);
+
+            assert_eq!(
+                game_state
+                    .alive_players()
+                    .map(|(i, _)| i)
+                    .collect::<Vec<usize>>(),
+                vec![0, 1, 3]
+            )
+        }
+
+        #[test]
+        fn returns_empty_when_all_eliminated() {
+            let arena = Grid::new(4, 4, vec![false; 16]);
+            let spawns = vec![
+                Spawn {
+                    x: 0,
+                    y: 0,
+                    direction: South,
+                },
+                Spawn {
+                    x: 1,
+                    y: 1,
+                    direction: South,
+                },
+                Spawn {
+                    x: 2,
+                    y: 2,
+                    direction: South,
+                },
+                Spawn {
+                    x: 3,
+                    y: 3,
+                    direction: South,
+                },
+            ];
+
+            let mut game_state = GameState::new(Arc::new(arena), spawns).unwrap();
+
+            game_state.players[0].eliminated_at = Some(0);
+            game_state.players[1].eliminated_at = Some(0);
+            game_state.players[2].eliminated_at = Some(0);
+            game_state.players[3].eliminated_at = Some(0);
+
+            assert_eq!(
+                game_state
+                    .alive_players()
+                    .map(|(i, _)| i)
+                    .collect::<Vec<usize>>(),
+                vec![]
+            )
         }
     }
 }
