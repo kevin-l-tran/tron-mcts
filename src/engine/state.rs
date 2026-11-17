@@ -294,8 +294,8 @@ impl GameState {
         Ok(())
     }
 
-    pub fn is_terminal() -> bool {
-        todo!()
+    pub fn is_terminal(&self) -> bool {
+        self.alive_count <= 1
     }
 
     pub fn outcome() -> Vec<(PlayerState, usize)> {
