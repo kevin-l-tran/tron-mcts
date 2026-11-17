@@ -19,6 +19,10 @@ pub struct PlayerState {
     pub eliminated_at: Option<usize>,
 }
 
+pub type StepInput<'a> = &'a [Option<Direction>];
+
+pub type UndoRecord = Vec<Direction>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum GameStateError {
     SpawnOutOfArena(Spawn),
@@ -26,6 +30,8 @@ pub enum GameStateError {
     DuplicateSpawnLocation(Spawn, Spawn),
     TooManyPlayers(usize),
     InvalidPlayerIndex(usize),
+    ExpectedNActions(usize),
+    ArenaTooLarge(usize, usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,8 +45,13 @@ pub struct GameState {
 
 impl GameState {
     pub fn new(arena: Arc<Arena>, spawns: Vec<Spawn>) -> Result<GameState, GameStateError> {
-        if u8::try_from(spawns.len()).is_err() {
+        if spawns.len() >= u8::MAX as usize {
             return Err(GameStateError::TooManyPlayers(spawns.len()));
+        }
+
+        // should be impossible to construct an arena this large since the vector will overflow
+        if isize::try_from(arena.width).is_err() || isize::try_from(arena.height).is_err() {
+            return Err(GameStateError::ArenaTooLarge(arena.width, arena.height));
         }
 
         let mut trails = Grid::filled(arena.width, arena.height, 0u8);
@@ -85,7 +96,7 @@ impl GameState {
         })
     }
 
-    pub fn legal_actions(&self, id: usize) -> Result<Vec<Direction>, GameStateError> {
+    pub fn safe_actions(&self, id: usize) -> Result<Vec<Direction>, GameStateError> {
         let player = match self.players.get(id) {
             Some(player) => player,
             None => return Err(GameStateError::InvalidPlayerIndex(id)),
@@ -98,10 +109,6 @@ impl GameState {
         let mut legal_directions = vec![];
 
         for direction in Direction::VALUES {
-            if direction == -player.direction {
-                continue;
-            }
-
             let (dx, dy) = direction.delta();
             let Some(player_x) = player.x.checked_add_signed(dx) else {
                 continue;
@@ -120,15 +127,99 @@ impl GameState {
         Ok(legal_directions)
     }
 
-    pub fn alive_players(&self) -> impl Iterator<Item = (usize, &PlayerState)> + '_ {
+    pub fn alive_players(&self) -> impl Iterator<Item = (usize, &PlayerState)> {
         self.players
             .iter()
             .enumerate()
             .filter(|p| p.1.eliminated_at.is_none())
     }
 
-    pub fn step() {
-        todo!()
+    pub fn step(&mut self, actions: StepInput) -> Result<UndoRecord, GameStateError> {
+        if actions.len() != self.players.len() {
+            return Err(GameStateError::ExpectedNActions(self.players.len()));
+        }
+
+        let record = self.players.iter().map(|p| p.direction).collect();
+
+        // 1. update game tick
+        self.tick += 1;
+
+        // None if position is out of bounds, Some((usize, usize)) otherwise
+        let mut final_positions = vec![];
+
+        for (id, action) in actions.iter().enumerate() {
+            let player = &mut self.players[id];
+            let resolved_action = action.unwrap_or(player.direction);
+
+            if player.eliminated_at.is_some() {
+                final_positions.push(Some((player.x, player.y)));
+                continue;
+            }
+
+            // 2. set player direction
+            player.direction = resolved_action;
+
+            // 3. push None if out of bounds, else Some((player_x, player_y))
+            let (dx, dy) = resolved_action.delta();
+
+            // if addition results in signed errors, player is out of arena
+            let Some(player_x) = player.x.checked_add_signed(dx) else {
+                final_positions.push(None);
+                continue;
+            };
+            let Some(player_y) = player.y.checked_add_signed(dy) else {
+                final_positions.push(None);
+                continue;
+            };
+
+            if !self.arena.in_bounds(player_x, player_y) {
+                final_positions.push(None);
+                continue;
+            }
+
+            final_positions.push(Some((player_x, player_y)));
+        }
+
+        // 4. if players collide, put obstacle (u8::MAX) on their collision spot if no obstacle exists
+        for i in 1..final_positions.len() {
+            let Some((x, y)) = final_positions[i - 1] else {
+                continue;
+            };
+
+            if final_positions[i..].contains(&Some((x, y))) && !self.is_occupied(x, y) {
+                let _ = self.trails.set(x, y, u8::MAX);
+            }
+        }
+
+        for id in 0..final_positions.len() {
+            // skip already eliminated players
+            if self.players[id].eliminated_at.is_some() {
+                continue;
+            }
+
+            // 5. for each player, eliminate when out of bounds or colliding with an object
+            let Some((x, y)) = final_positions[id] else {
+                self.players[id].eliminated_at = Some(self.tick);
+                continue;
+            };
+
+            if self.is_occupied(x, y) {
+                self.players[id].eliminated_at = Some(self.tick);
+                continue;
+            }
+
+            // 6. update the player's current position
+            self.players[id].x = x;
+            self.players[id].y = y;
+
+            // 7. add a trail at the player's current position
+            self.set_trail(x, y, id);
+        }
+
+        // 8. update alive count
+        self.alive_count = self.alive_players().count();
+
+        Ok(record)
     }
 
     pub fn undo_step() {
@@ -157,7 +248,7 @@ impl GameState {
     }
 
     fn is_occupied(&self, x: usize, y: usize) -> bool {
-        self.trails[(x, y)] != 0 || self.arena[(x, y)]
+        self.arena.in_bounds(x, y) && (self.trails[(x, y)] != 0 || self.arena[(x, y)])
     }
 }
 
@@ -249,8 +340,8 @@ mod tests {
         }
 
         #[test]
-        fn accepts_at_most_255_players() {
-            let num_players = u8::MAX as usize; // 255 players
+        fn accepts_at_most_254_players() {
+            let num_players = u8::MAX as usize - 1; // 254 players
             let arena = Grid::filled(16, 16, false);
 
             let spawns = (0..num_players)
@@ -266,7 +357,7 @@ mod tests {
 
         #[test]
         fn rejects_too_many_players() {
-            let num_players = u8::MAX as usize + 1; // 256 players
+            let num_players = u8::MAX as usize; // 255 players
             let arena = Grid::filled(16, 16, false);
 
             let spawns = (0..num_players)
@@ -349,7 +440,7 @@ mod tests {
         }
     }
 
-    mod legal_actions {
+    mod safe_actions {
         use crate::engine::action::Direction::{East, North, South, West};
 
         use super::*;
@@ -365,21 +456,10 @@ mod tests {
 
             let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
 
-            assert_eq!(game_state.legal_actions(0).unwrap(), [South, East, West]);
-        }
-
-        #[test]
-        fn does_not_include_backwards_direction() {
-            let arena = Grid::new(4, 4, vec![false; 16]);
-            let spawns = vec![Spawn {
-                x: 1,
-                y: 1,
-                direction: South,
-            }];
-
-            let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
-
-            assert!(!game_state.legal_actions(0).unwrap().contains(&North));
+            assert_eq!(
+                game_state.safe_actions(0).unwrap(),
+                [North, South, East, West]
+            );
         }
 
         #[test]
@@ -393,7 +473,7 @@ mod tests {
 
             let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
 
-            assert!(!game_state.legal_actions(0).unwrap().contains(&North));
+            assert!(!game_state.safe_actions(0).unwrap().contains(&North));
         }
 
         #[test]
@@ -409,7 +489,7 @@ mod tests {
 
             let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
 
-            assert!(!game_state.legal_actions(0).unwrap().contains(&East));
+            assert!(!game_state.safe_actions(0).unwrap().contains(&East));
         }
 
         #[test]
@@ -433,8 +513,8 @@ mod tests {
             game_state.trails[(0, 1)] = 1;
             game_state.trails[(2, 1)] = 2;
 
-            assert!(!game_state.legal_actions(0).unwrap().contains(&East));
-            assert!(!game_state.legal_actions(0).unwrap().contains(&West));
+            assert!(!game_state.safe_actions(0).unwrap().contains(&East));
+            assert!(!game_state.safe_actions(0).unwrap().contains(&West));
         }
 
         #[test]
@@ -453,7 +533,7 @@ mod tests {
 
             let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
 
-            assert_eq!(game_state.legal_actions(0).unwrap(), []);
+            assert_eq!(game_state.safe_actions(0).unwrap(), []);
         }
 
         #[test]
@@ -469,7 +549,7 @@ mod tests {
 
             game_state.players[0].eliminated_at = Some(0);
 
-            assert_eq!(game_state.legal_actions(0), Ok(vec![]));
+            assert_eq!(game_state.safe_actions(0), Ok(vec![]));
         }
 
         #[test]
@@ -480,7 +560,7 @@ mod tests {
             let game_state = GameState::new(Arc::new(arena), spawns).unwrap();
 
             assert_eq!(
-                game_state.legal_actions(0),
+                game_state.safe_actions(0),
                 Err(GameStateError::InvalidPlayerIndex(0))
             );
         }
@@ -607,6 +687,593 @@ mod tests {
                     .collect::<Vec<usize>>(),
                 vec![]
             )
+        }
+    }
+
+    mod step {
+        use crate::engine::action::Direction::{East, North, South, West};
+
+        use super::*;
+
+        static DEFAULT_ARENA_CELLS: [bool; 16] = [false; 16];
+
+        static DEFAULT_SPAWNS: [Spawn; 4] = [
+            Spawn {
+                x: 0,
+                y: 0,
+                direction: South,
+            },
+            Spawn {
+                x: 1,
+                y: 1,
+                direction: South,
+            },
+            Spawn {
+                x: 2,
+                y: 2,
+                direction: South,
+            },
+            Spawn {
+                x: 3,
+                y: 3,
+                direction: South,
+            },
+        ];
+
+        static SURVIVAL_SPAWNS: [Spawn; 4] = [
+            Spawn {
+                x: 0,
+                y: 0,
+                direction: South,
+            },
+            Spawn {
+                x: 1,
+                y: 1,
+                direction: East,
+            },
+            Spawn {
+                x: 2,
+                y: 2,
+                direction: West,
+            },
+            Spawn {
+                x: 3,
+                y: 3,
+                direction: North,
+            },
+        ];
+
+        static CORNER_SPAWNS: [Spawn; 4] = [
+            Spawn {
+                x: 0,
+                y: 0,
+                direction: North,
+            },
+            Spawn {
+                x: 3,
+                y: 0,
+                direction: East,
+            },
+            Spawn {
+                x: 3,
+                y: 3,
+                direction: South,
+            },
+            Spawn {
+                x: 0,
+                y: 3,
+                direction: West,
+            },
+        ];
+
+        fn setup_game_state(spawns: &[Spawn], arena_cells: &[bool]) -> GameState {
+            let arena = Grid::new(4, 4, Vec::from(arena_cells));
+            GameState::new(Arc::new(arena), Vec::from(spawns)).unwrap()
+        }
+
+        #[test]
+        fn moves_players_in_given_directions() {
+            let game_state = &mut setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(South), Some(East), Some(West), Some(North)];
+
+            let final_positions = vec![(0, 1), (2, 1), (1, 2), (3, 2)];
+            let _ = game_state.step(&actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| (p.x, p.y))
+                    .collect::<Vec<(usize, usize)>>(),
+                final_positions
+            )
+        }
+
+        #[test]
+        fn moves_players_forwards_when_no_movement_is_provided() {
+            let game_state = &mut setup_game_state(&SURVIVAL_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [None; 4];
+
+            let final_positions = vec![(0, 1), (2, 1), (1, 2), (3, 2)];
+            let _ = game_state.step(&actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| (p.x, p.y))
+                    .collect::<Vec<(usize, usize)>>(),
+                final_positions
+            )
+        }
+
+        #[test]
+        fn increments_tick() {
+            let game_state = &mut setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [None; 4];
+
+            let _ = game_state.step(&actions);
+
+            assert_eq!(game_state.tick, 1);
+        }
+
+        #[test]
+        fn updates_player_directions() {
+            let game_state = &mut setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(South), Some(East), Some(West), Some(North)];
+
+            let _ = game_state.step(&actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.direction)
+                    .collect::<Vec<Direction>>(),
+                [South, East, West, North]
+            )
+        }
+
+        #[test]
+        fn add_trails_to_new_position() {
+            let game_state = &mut setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(South), Some(East), Some(West), Some(North)];
+
+            let trails = &mut game_state.trails.clone();
+            let new_trail_positions = vec![(0, 1), (2, 1), (1, 2), (3, 2)];
+
+            for (i, (x, y)) in new_trail_positions.iter().enumerate() {
+                trails[(*x, *y)] = (i + 1) as u8;
+            }
+
+            let _ = game_state.step(&actions);
+
+            assert_eq!(game_state.trails, *trails)
+        }
+
+        #[test]
+        fn returns_previous_directions() {
+            let game_state = &mut setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(South), Some(East), Some(West), Some(North)];
+
+            assert_eq!(
+                game_state.step(&actions),
+                Ok(vec![South, South, South, South])
+            )
+        }
+
+        #[test]
+        fn eliminates_players_at_arena_boundary() {
+            let game_state = &mut setup_game_state(&CORNER_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [None; 4];
+
+            let _ = game_state.step(&actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.eliminated_at)
+                    .collect::<Vec<Option<usize>>>(),
+                vec![Some(1), Some(1), Some(1), Some(1)]
+            )
+        }
+
+        #[test]
+        fn eliminates_players_at_obstacles() {
+            let cells = [
+                false, false, false, false, true, false, true, false, false, true, false, true,
+                false, false, false, false,
+            ];
+
+            let game_state = &mut setup_game_state(&SURVIVAL_SPAWNS, &cells);
+            let actions = [None; 4];
+
+            let _ = game_state.step(&actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.eliminated_at)
+                    .collect::<Vec<Option<usize>>>(),
+                vec![Some(1), Some(1), Some(1), Some(1)]
+            )
+        }
+
+        #[test]
+        fn eliminates_players_at_other_trails() {
+            let game_state = &mut setup_game_state(&CORNER_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(East), Some(South), Some(West), Some(North)];
+
+            let _ = game_state.step(&actions);
+            let _ = game_state.step(&actions);
+            let _ = game_state.step(&actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.eliminated_at)
+                    .collect::<Vec<Option<usize>>>(),
+                vec![Some(3), Some(3), Some(3), Some(3)]
+            )
+        }
+
+        #[test]
+        fn eliminates_players_at_own_trails() {
+            let game_state = &mut setup_game_state(&CORNER_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(East), Some(South), Some(West), Some(North)];
+            let reverse_actions = [Some(-East), Some(-South), Some(-West), Some(-North)];
+
+            let _ = game_state.step(&actions);
+            let _ = game_state.step(&reverse_actions);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.eliminated_at)
+                    .collect::<Vec<Option<usize>>>(),
+                vec![Some(2), Some(2), Some(2), Some(2)]
+            )
+        }
+
+        #[test]
+        fn preserves_previous_trails() {
+            let game_state = &mut setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let actions = [Some(South), Some(East), Some(West), Some(North)];
+
+            let _ = game_state.step(&actions);
+
+            for (i, spawn) in DEFAULT_SPAWNS.iter().enumerate() {
+                assert_eq!(game_state.trails[(spawn.x, spawn.y)], (i + 1) as u8);
+            }
+        }
+
+        #[test]
+        fn eliminates_two_players_on_head_on_collision() {
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 2,
+                    direction: East,
+                },
+                Spawn {
+                    x: 3,
+                    y: 2,
+                    direction: West,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None; 2]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.players[1].eliminated_at, Some(1));
+            assert_eq!(game_state.trails[(2, 2)], u8::MAX);
+            assert_eq!(game_state.alive_count, 0);
+        }
+
+        #[test]
+        fn eliminates_three_players_on_head_on_collision() {
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 2,
+                    direction: East,
+                },
+                Spawn {
+                    x: 3,
+                    y: 2,
+                    direction: West,
+                },
+                Spawn {
+                    x: 2,
+                    y: 1,
+                    direction: South,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None; 3]);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.eliminated_at)
+                    .collect::<Vec<Option<usize>>>(),
+                vec![Some(1), Some(1), Some(1)]
+            );
+            assert_eq!(game_state.trails[(2, 2)], u8::MAX);
+            assert_eq!(game_state.alive_count, 0);
+        }
+
+        #[test]
+        fn preserves_existing_trail_on_head_on_collision() {
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 2,
+                    direction: East,
+                },
+                Spawn {
+                    x: 3,
+                    y: 2,
+                    direction: West,
+                },
+                Spawn {
+                    x: 2,
+                    y: 2,
+                    direction: North,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None; 3]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.players[1].eliminated_at, Some(1));
+            assert_eq!(game_state.players[2].eliminated_at, None);
+            assert_eq!(game_state.trails[(2, 2)], 3);
+            assert_eq!(game_state.trails[(2, 1)], 3);
+            assert_eq!(game_state.alive_count, 1);
+        }
+
+        #[test]
+        fn does_not_create_trail_on_head_on_collision_with_obstacle() {
+            let mut cells = DEFAULT_ARENA_CELLS;
+            cells[2 + 2 * 4] = true;
+
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 2,
+                    direction: East,
+                },
+                Spawn {
+                    x: 3,
+                    y: 2,
+                    direction: West,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &cells);
+            let _ = game_state.step(&[None; 2]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.players[1].eliminated_at, Some(1));
+            assert_eq!(game_state.trails[(2, 2)], 0);
+            assert_eq!(game_state.arena[(2, 2)], true);
+        }
+
+        #[test]
+        fn eliminates_players_swapping_positions() {
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 1,
+                    direction: East,
+                },
+                Spawn {
+                    x: 2,
+                    y: 1,
+                    direction: West,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let old_trails = game_state.trails.clone();
+            let _ = game_state.step(&[None; 2]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.players[1].eliminated_at, Some(1));
+            assert_eq!(
+                (game_state.players[0].x, game_state.players[0].y),
+                (1, 1)
+            );
+            assert_eq!(
+                (game_state.players[1].x, game_state.players[1].y),
+                (2, 1)
+            );
+            assert_eq!(game_state.trails, old_trails);
+        }
+
+        #[test]
+        fn does_not_move_eliminated_players() {
+            let spawns = [Spawn {
+                x: 1,
+                y: 0,
+                direction: North,
+            }];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None]);
+            let eliminated_player = game_state.players[0];
+
+            let _ = game_state.step(&[Some(East)]);
+            let _ = game_state.step(&[Some(South)]);
+
+            assert_eq!(game_state.players[0], eliminated_player);
+            assert_eq!(game_state.tick, 3);
+        }
+
+        #[test]
+        fn ignores_actions_for_eliminated_players() {
+            let spawns = [Spawn {
+                x: 1,
+                y: 0,
+                direction: North,
+            }];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None]);
+            let _ = game_state.step(&[Some(East)]);
+
+            assert_eq!(game_state.players[0].direction, North);
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+        }
+
+        #[test]
+        fn preserves_elimination_tick() {
+            let spawns = [Spawn {
+                x: 1,
+                y: 0,
+                direction: North,
+            }];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None]);
+            let _ = game_state.step(&[None]);
+            let _ = game_state.step(&[None]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.alive_count, 0);
+        }
+
+        #[test]
+        fn does_not_add_trails_for_eliminated_players() {
+            let spawns = [Spawn {
+                x: 1,
+                y: 0,
+                direction: North,
+            }];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let old_trails = game_state.trails.clone();
+            let _ = game_state.step(&[None]);
+            let _ = game_state.step(&[Some(East)]);
+
+            assert_eq!(game_state.trails, old_trails);
+        }
+
+        #[test]
+        fn preserves_eliminated_player_trail_on_collision() {
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 0,
+                    direction: North,
+                },
+                Spawn {
+                    x: 3,
+                    y: 1,
+                    direction: West,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None; 2]);
+            let _ = game_state.step(&[None, Some(North)]);
+            let _ = game_state.step(&[None, Some(West)]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.players[1].eliminated_at, Some(3));
+            assert_eq!(game_state.trails[(1, 0)], 1);
+            assert_eq!(game_state.alive_count, 0);
+        }
+
+        #[test]
+        fn updates_alive_count_after_eliminations() {
+            let game_state = &mut setup_game_state(&SURVIVAL_SPAWNS, &DEFAULT_ARENA_CELLS);
+
+            assert_eq!(game_state.alive_count, 4);
+
+            let _ = game_state.step(&[Some(North), None, None, None]);
+            assert_eq!(game_state.alive_count, 3);
+
+            let _ = game_state.step(&[None, Some(South), None, None]);
+            assert_eq!(game_state.alive_count, 2);
+
+            assert_eq!(
+                game_state
+                    .players
+                    .iter()
+                    .map(|p| p.eliminated_at)
+                    .collect::<Vec<Option<usize>>>(),
+                vec![Some(1), Some(2), None, None]
+            );
+        }
+
+        #[test]
+        fn does_not_eliminate_uninvolved_players_on_head_on_collision() {
+            let spawns = [
+                Spawn {
+                    x: 1,
+                    y: 2,
+                    direction: East,
+                },
+                Spawn {
+                    x: 3,
+                    y: 2,
+                    direction: West,
+                },
+                Spawn {
+                    x: 0,
+                    y: 0,
+                    direction: South,
+                },
+            ];
+
+            let game_state = &mut setup_game_state(&spawns, &DEFAULT_ARENA_CELLS);
+            let _ = game_state.step(&[None; 3]);
+
+            assert_eq!(game_state.players[0].eliminated_at, Some(1));
+            assert_eq!(game_state.players[1].eliminated_at, Some(1));
+            assert_eq!(game_state.players[2].eliminated_at, None);
+            assert_eq!(
+                (game_state.players[2].x, game_state.players[2].y),
+                (0, 1)
+            );
+            assert_eq!(game_state.alive_count, 1);
+        }
+
+        #[test]
+        fn errors_if_actions_is_not_length_of_players() {
+            let mut game_state = setup_game_state(&DEFAULT_SPAWNS, &DEFAULT_ARENA_CELLS);
+            let old_state = game_state.clone();
+
+            assert_eq!(
+                game_state.step(&[]),
+                Err(GameStateError::ExpectedNActions(4))
+            );
+            assert_eq!(
+                game_state.step(&[
+                    Some(South),
+                    Some(South),
+                    Some(South),
+                    Some(South),
+                    Some(South)
+                ]),
+                Err(GameStateError::ExpectedNActions(4))
+            );
+            assert_eq!(
+                game_state.step(&[None, Some(South), Some(South), Some(South), Some(South)]),
+                Err(GameStateError::ExpectedNActions(4))
+            );
+
+            assert_eq!(game_state, old_state);
         }
     }
 }
