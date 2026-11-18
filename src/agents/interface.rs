@@ -18,7 +18,7 @@ pub struct AgentContext {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct AgentDecision {
-    pub action: Action,
+    pub action: Option<Action>,
     pub simulation_count: usize,
 }
 
