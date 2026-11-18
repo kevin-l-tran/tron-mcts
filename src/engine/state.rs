@@ -298,8 +298,26 @@ impl GameState {
         self.alive_count <= 1
     }
 
-    pub fn outcome() -> Vec<(PlayerState, usize)> {
-        todo!()
+    pub fn outcome(&self) -> Option<Vec<usize>> {
+        if !self.is_terminal() {
+            return None;
+        }
+
+        let ranks = self
+            .players
+            .iter()
+            .map(|player| {
+                let elimination_at = player.eliminated_at.unwrap_or(usize::MAX);
+
+                1 + self
+                    .players
+                    .iter()
+                    .filter(|other| other.eliminated_at.unwrap_or(usize::MAX) > elimination_at)
+                    .count()
+            })
+            .collect();
+
+        Some(ranks)
     }
 
     fn trail_owner(&self, x: usize, y: usize) -> Option<usize> {
@@ -2010,6 +2028,73 @@ mod tests {
                 Err(GameStateError::InvalidUndoRecord)
             );
             assert_eq!(game_state, old_state);
+        }
+    }
+
+    mod outcome {
+        use crate::engine::action::Direction::South;
+
+        use super::*;
+
+        fn setup_game_state() -> GameState {
+            let arena = Grid::filled(4, 4, false);
+            let spawns = (0..4)
+                .map(|i| Spawn {
+                    x: i,
+                    y: i,
+                    direction: South,
+                })
+                .collect();
+
+            GameState::new(Arc::new(arena), spawns).unwrap()
+        }
+
+        #[test]
+        fn returns_none_for_ongoing_game() {
+            let mut game_state = setup_game_state();
+
+            game_state.players[0].eliminated_at = Some(1);
+            game_state.players[1].eliminated_at = Some(2);
+            game_state.alive_count = 2;
+
+            assert_eq!(game_state.outcome(), None);
+        }
+
+        #[test]
+        fn ranks_last_surviving_player_first() {
+            let mut game_state = setup_game_state();
+
+            game_state.players[0].eliminated_at = Some(1);
+            game_state.players[1].eliminated_at = Some(2);
+            game_state.players[2].eliminated_at = Some(3);
+            game_state.alive_count = 1;
+
+            assert_eq!(game_state.outcome(), Some(vec![4, 3, 2, 1]));
+        }
+
+        #[test]
+        fn assigns_same_rank_to_simultaneous_eliminations() {
+            let mut game_state = setup_game_state();
+
+            game_state.players[0].eliminated_at = Some(1);
+            game_state.players[1].eliminated_at = Some(2);
+            game_state.players[2].eliminated_at = Some(2);
+            game_state.alive_count = 1;
+
+            assert_eq!(game_state.outcome(), Some(vec![4, 2, 2, 1]));
+        }
+
+        #[test]
+        fn ranks_players_when_everyone_is_eliminated() {
+            let mut game_state = setup_game_state();
+
+            game_state.players[0].eliminated_at = Some(1);
+            game_state.players[1].eliminated_at = Some(1);
+            game_state.players[2].eliminated_at = Some(3);
+            game_state.players[3].eliminated_at = Some(3);
+            game_state.alive_count = 0;
+
+            assert_eq!(game_state.outcome(), Some(vec![3, 3, 1, 1]));
         }
     }
 }
