@@ -41,7 +41,6 @@ pub enum GameStateError {
     ExpectedNActions(usize),
     ArenaTooLarge(usize, usize),
     GameJustStarted,
-    GameTerminated,
     InvalidUndoRecord,
 }
 
