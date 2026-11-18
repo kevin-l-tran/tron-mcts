@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    agents::interface::{Agent, AgentContext, SearchBudget},
+    agents::interface::{Agent, AgentContext},
     engine::{
         action::Action,
         state::{Arena, GameState, GameStateError, Spawn},
@@ -14,23 +14,13 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RunConfig {
     pub max_ticks: usize,
-    pub decision_budget: SearchBudget,
     pub record_replay: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum TimeoutReason {
-    MaxTickTimeout,
-    MaxSimulationCountTimeout,
-    MaxDurationTimeout,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TerminationReason {
     GameOver,
     MaxTickTimeout,
-    MaxSimulationCountTimeout,
-    MaxDurationTimeout,
 }
 
 pub type ReplayFrame = Vec<Option<Action>>;
@@ -68,9 +58,6 @@ pub struct MatchRunner {
     pub replay: Option<Vec<ReplayFrame>>,
 
     state: GameState,
-    timeout_reason: Option<TimeoutReason>,
-    total_decision_time: Duration,
-    total_simulation_counts: usize,
 }
 
 impl MatchRunner {
@@ -117,19 +104,11 @@ impl MatchRunner {
             config,
             replay,
             state,
-            timeout_reason: None,
-            total_decision_time: Duration::new(0, 0),
-            total_simulation_counts: 0,
         })
     }
 
     pub fn step(&mut self) -> Result<(), MatchRunnerError> {
-        if self.state.is_terminal() || self.timeout_reason.is_some() {
-            return Err(MatchRunnerError::GameTerminated);
-        }
-
-        if self.state.tick >= self.config.max_ticks {
-            self.timeout_reason = Some(TimeoutReason::MaxTickTimeout);
+        if self.termination_reason().is_some() {
             return Err(MatchRunnerError::GameTerminated);
         }
 
@@ -155,10 +134,6 @@ impl MatchRunner {
             // update agent stats
             self.agent_stats[id].total_decision_time += elapsed;
             self.agent_stats[id].total_simulation_counts += decision.simulation_count;
-
-            // update total caches
-            self.total_decision_time += elapsed;
-            self.total_simulation_counts += decision.simulation_count;
         }
 
         // execute actions
@@ -172,29 +147,34 @@ impl MatchRunner {
             replay.push(actions);
         }
 
-        // update timeout status
-        if self.state.tick >= self.config.max_ticks && !self.state.is_terminal() {
-            self.timeout_reason = Some(TimeoutReason::MaxTickTimeout);
-        }
-
-        match self.config.decision_budget {
-            SearchBudget::Simulations(max_count) => {
-                if self.total_simulation_counts > max_count {
-                    self.timeout_reason = Some(TimeoutReason::MaxSimulationCountTimeout);
-                }
-            }
-            SearchBudget::Time(max_duration) => {
-                if self.total_decision_time > max_duration {
-                    self.timeout_reason = Some(TimeoutReason::MaxDurationTimeout);
-                }
-            }
-        }
-
         Ok(())
     }
 
     pub fn run(&mut self) -> Result<MatchResult, MatchRunnerError> {
-        todo!()
+        while self.termination_reason().is_none() {
+            self.step()?;
+        }
+
+        let termination_reason = self.termination_reason().unwrap();
+
+        Ok(MatchResult {
+            final_state: self.state.clone(),
+            ticks: self.state.tick,
+            ranks: self.state.outcome(),
+            termination: termination_reason,
+            agent_stats: self.agent_stats.clone(),
+            replay: self.replay.clone(),
+        })
+    }
+
+    fn termination_reason(&self) -> Option<TerminationReason> {
+        if self.state.is_terminal() {
+            Some(TerminationReason::GameOver)
+        } else if self.state.tick >= self.config.max_ticks {
+            Some(TerminationReason::MaxTickTimeout)
+        } else {
+            None
+        }
     }
 }
 
@@ -203,7 +183,7 @@ mod tests {
     use rand::{SeedableRng, rngs::ChaCha8Rng};
 
     use crate::{
-        agents::interface::AgentDecision,
+        agents::interface::{AgentDecision, SearchBudget},
         engine::{action::Direction, grid::Grid},
     };
 
@@ -258,7 +238,6 @@ mod tests {
     fn test_config(record_replay: bool) -> RunConfig {
         RunConfig {
             max_ticks: 100,
-            decision_budget: SearchBudget::Simulations(100),
             record_replay,
         }
     }
@@ -627,7 +606,7 @@ mod tests {
         }
 
         #[test]
-        fn accumulates_agent_and_match_simulation_statistics() {
+        fn accumulates_agent_simulation_statistics() {
             let mut runner = runner_with_agents(
                 test_spawns(),
                 vec![
@@ -647,15 +626,6 @@ mod tests {
 
             assert_eq!(runner.agent_stats[0].total_simulation_counts, 6);
             assert_eq!(runner.agent_stats[1].total_simulation_counts, 10);
-            assert_eq!(runner.total_simulation_counts, 16);
-            assert_eq!(
-                runner.total_decision_time,
-                runner
-                    .agent_stats
-                    .iter()
-                    .map(|stats| stats.total_decision_time)
-                    .sum(),
-            );
         }
 
         struct RandomConsumingAgent;
@@ -762,9 +732,9 @@ mod tests {
         }
 
         #[test]
-        fn returns_error_when_timeout_has_already_occurred() {
+        fn returns_error_when_tick_limit_has_been_reached() {
             let mut runner = test_runner(false);
-            runner.timeout_reason = Some(TimeoutReason::MaxTickTimeout);
+            runner.config.max_ticks = 0;
             let initial_state = runner.state.clone();
 
             assert_eq!(runner.step(), Err(MatchRunnerError::GameTerminated));
@@ -779,7 +749,10 @@ mod tests {
             runner.step().unwrap();
 
             assert_eq!(runner.state.tick, 1);
-            assert_eq!(runner.timeout_reason, Some(TimeoutReason::MaxTickTimeout));
+            assert_eq!(
+                runner.termination_reason(),
+                Some(TerminationReason::MaxTickTimeout)
+            );
             assert_eq!(runner.step(), Err(MatchRunnerError::GameTerminated));
             assert_eq!(runner.state.tick, 1);
         }
@@ -854,56 +827,328 @@ mod tests {
         }
 
         #[test]
-        fn records_simulation_count_timeout_after_exceeding_budget() {
+        fn simulation_counts_do_not_terminate_match() {
             let mut runner = runner_with_agents(
                 test_spawns(),
                 fixed_agents(&[Some(Action::Straight), Some(Action::Straight)], 3),
             );
-            runner.config.decision_budget = SearchBudget::Simulations(5);
+            for context in &mut runner.agent_contexts {
+                context.budget = SearchBudget::Simulations(1);
+            }
 
             runner.step().unwrap();
+            runner.step().unwrap();
 
-            assert_eq!(runner.total_simulation_counts, 6);
-            assert_eq!(
-                runner.timeout_reason,
-                Some(TimeoutReason::MaxSimulationCountTimeout),
-            );
-            assert_eq!(runner.step(), Err(MatchRunnerError::GameTerminated));
+            assert_eq!(runner.state.tick, 2);
+            assert_eq!(runner.agent_stats[0].total_simulation_counts, 6);
+            assert_eq!(runner.agent_stats[1].total_simulation_counts, 6);
+            assert_eq!(runner.termination_reason(), None);
         }
 
         #[test]
-        fn records_time_timeout_when_cumulative_decision_time_exceeds_budget() {
+        fn decision_time_does_not_terminate_match() {
             let mut runner = test_runner(false);
-            runner.config.decision_budget = SearchBudget::Time(Duration::from_secs(1));
-            runner.total_decision_time = Duration::from_secs(2);
+            for context in &mut runner.agent_contexts {
+                context.budget = SearchBudget::Time(Duration::ZERO);
+            }
 
             runner.step().unwrap();
+            runner.step().unwrap();
 
-            assert_eq!(
-                runner.timeout_reason,
-                Some(TimeoutReason::MaxDurationTimeout)
-            );
-            assert_eq!(runner.step(), Err(MatchRunnerError::GameTerminated));
+            assert_eq!(runner.state.tick, 2);
+            assert_eq!(runner.termination_reason(), None);
         }
 
         #[test]
-        fn accumulates_simulation_counts_before_timeout() {
+        fn accumulates_simulation_counts_across_ticks() {
             let mut runner = runner_with_agents(
                 test_spawns(),
                 fixed_agents(&[Some(Action::Straight), Some(Action::Straight)], 2),
             );
-            runner.config.decision_budget = SearchBudget::Simulations(5);
 
             runner.step().unwrap();
-            assert_eq!(runner.total_simulation_counts, 4);
-            assert_eq!(runner.timeout_reason, None);
+            assert_eq!(runner.agent_stats[0].total_simulation_counts, 2);
+            assert_eq!(runner.agent_stats[1].total_simulation_counts, 2);
 
             runner.step().unwrap();
-            assert_eq!(runner.total_simulation_counts, 8);
-            assert_eq!(
-                runner.timeout_reason,
-                Some(TimeoutReason::MaxSimulationCountTimeout),
+            assert_eq!(runner.agent_stats[0].total_simulation_counts, 4);
+            assert_eq!(runner.agent_stats[1].total_simulation_counts, 4);
+        }
+    }
+
+    mod run {
+        use super::*;
+
+        struct SimulationAgent {
+            simulation_count: usize,
+        }
+
+        impl Agent for SimulationAgent {
+            fn select_action(
+                &mut self,
+                _state: &GameState,
+                _player_id: usize,
+                _context: &mut AgentContext,
+            ) -> AgentDecision {
+                AgentDecision {
+                    action: Some(Action::Straight),
+                    simulation_count: self.simulation_count,
+                }
+            }
+        }
+
+        fn simulation_runner(simulation_count: usize, record_replay: bool) -> MatchRunner {
+            MatchRunner::new(
+                Arc::new(Grid::filled(4, 4, false)),
+                test_spawns(),
+                (0..2)
+                    .map(|_| Box::new(SimulationAgent { simulation_count }) as Box<dyn Agent>)
+                    .collect(),
+                test_contexts(2),
+                test_config(record_replay),
+            )
+            .unwrap()
+        }
+
+        fn collision_runner(max_ticks: usize, record_replay: bool) -> MatchRunner {
+            let spawns = vec![
+                Spawn {
+                    x: 1,
+                    y: 2,
+                    direction: Direction::East,
+                },
+                Spawn {
+                    x: 3,
+                    y: 2,
+                    direction: Direction::West,
+                },
+            ];
+            let mut config = test_config(record_replay);
+            config.max_ticks = max_ticks;
+
+            MatchRunner::new(
+                Arc::new(Grid::filled(5, 5, false)),
+                spawns,
+                test_agents(2),
+                test_contexts(2),
+                config,
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn runs_until_all_players_collide() {
+            let mut runner = collision_runner(10, true);
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 1);
+            assert_eq!(result.final_state.tick, 1);
+            assert_eq!(result.final_state.alive_count, 0);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+            assert_eq!(result.ranks, Some(vec![1.5, 1.5]));
+            assert_eq!(result.replay, Some(vec![vec![Some(Action::Straight); 2]]));
+        }
+
+        #[test]
+        fn returns_ranks_when_one_player_survives() {
+            let spawns = vec![
+                Spawn {
+                    x: 0,
+                    y: 0,
+                    direction: Direction::North,
+                },
+                Spawn {
+                    x: 3,
+                    y: 3,
+                    direction: Direction::West,
+                },
+            ];
+            let mut runner = MatchRunner::new(
+                Arc::new(Grid::filled(4, 4, false)),
+                spawns,
+                test_agents(2),
+                test_contexts(2),
+                test_config(false),
+            )
+            .unwrap();
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 1);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+            assert_eq!(result.final_state.alive_count, 1);
+            assert_eq!(result.ranks, Some(vec![2.0, 1.0]));
+        }
+
+        #[test]
+        fn returns_immediately_when_game_is_initially_terminal() {
+            let spawns = vec![Spawn {
+                x: 1,
+                y: 1,
+                direction: Direction::East,
+            }];
+            let mut runner = MatchRunner::new(
+                Arc::new(Grid::filled(4, 4, false)),
+                spawns,
+                test_agents(1),
+                test_contexts(1),
+                test_config(true),
+            )
+            .unwrap();
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 0);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+            assert_eq!(result.ranks, Some(vec![1.0]));
+            assert_eq!(result.replay, Some(vec![]));
+            assert_eq!(result.agent_stats[0].total_simulation_counts, 0);
+        }
+
+        #[test]
+        fn stops_at_tick_limit_without_finishing_game() {
+            let mut runner = test_runner(false);
+            runner.config.max_ticks = 2;
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 2);
+            assert_eq!(result.final_state.tick, 2);
+            assert_eq!(result.final_state.alive_count, 2);
+            assert_eq!(result.termination, TerminationReason::MaxTickTimeout);
+            assert_eq!(result.ranks, None);
+        }
+
+        #[test]
+        fn does_not_step_when_max_ticks_is_zero() {
+            let mut runner = test_runner(true);
+            runner.config.max_ticks = 0;
+            let initial_state = runner.state.clone();
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 0);
+            assert_eq!(result.termination, TerminationReason::MaxTickTimeout);
+            assert_eq!(result.final_state, initial_state);
+            assert_eq!(result.replay, Some(vec![]));
+            assert!(
+                result
+                    .agent_stats
+                    .iter()
+                    .all(|stats| stats.total_simulation_counts == 0)
             );
+        }
+
+        #[test]
+        fn prefers_game_over_when_game_ends_on_last_allowed_tick() {
+            let mut runner = collision_runner(1, false);
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 1);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+        }
+
+        #[test]
+        fn records_every_action_frame_for_a_complete_match() {
+            let mut runner = test_runner(true);
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 4);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+            assert_eq!(
+                result.replay,
+                Some(vec![vec![Some(Action::Straight); 2]; 4])
+            );
+        }
+
+        #[test]
+        fn omits_replay_when_recording_is_disabled() {
+            let mut runner = test_runner(false);
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 4);
+            assert_eq!(result.replay, None);
+        }
+
+        #[test]
+        fn continues_after_manual_steps_without_resetting_statistics_or_replay() {
+            let mut runner = simulation_runner(3, true);
+            runner.step().unwrap();
+            assert_eq!(runner.state.tick, 1);
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 4);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+            assert_eq!(result.replay.as_ref().unwrap().len(), 4);
+            assert_eq!(result.agent_stats.len(), 2);
+            assert_eq!(result.agent_stats[0].total_simulation_counts, 12);
+            assert_eq!(result.agent_stats[1].total_simulation_counts, 12);
+            assert_eq!(result.agent_stats, runner.agent_stats);
+            assert_eq!(result.replay, runner.replay);
+        }
+
+        #[test]
+        fn runs_to_game_over_despite_simulation_counts() {
+            let mut runner = simulation_runner(3, false);
+            for context in &mut runner.agent_contexts {
+                context.budget = SearchBudget::Simulations(1);
+            }
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 4);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+            assert_eq!(result.agent_stats[0].total_simulation_counts, 12);
+            assert_eq!(result.agent_stats[1].total_simulation_counts, 12);
+        }
+
+        #[test]
+        fn runs_to_game_over_despite_zero_decision_time_budget() {
+            let mut runner = test_runner(false);
+            for context in &mut runner.agent_contexts {
+                context.budget = SearchBudget::Time(Duration::ZERO);
+            }
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 4);
+            assert_eq!(result.termination, TerminationReason::GameOver);
+        }
+
+        #[test]
+        fn running_an_already_finished_match_does_not_change_its_result() {
+            let mut runner = collision_runner(10, true);
+            let first_result = runner.run().unwrap();
+
+            let second_result = runner.run().unwrap();
+
+            assert_eq!(second_result, first_result);
+        }
+
+        #[test]
+        fn reports_game_over_when_agents_report_simulations() {
+            let mut runner = collision_runner(10, false);
+            runner.agents = (0..2)
+                .map(|_| {
+                    Box::new(SimulationAgent {
+                        simulation_count: 3,
+                    }) as Box<dyn Agent>
+                })
+                .collect();
+            for context in &mut runner.agent_contexts {
+                context.budget = SearchBudget::Simulations(1);
+            }
+
+            let result = runner.run().unwrap();
+
+            assert_eq!(result.ticks, 1);
+            assert_eq!(result.final_state.alive_count, 0);
+            assert_eq!(result.termination, TerminationReason::GameOver);
         }
     }
 }
