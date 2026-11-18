@@ -303,7 +303,7 @@ impl GameState {
         self.alive_count <= 1
     }
 
-    pub fn outcome(&self) -> Option<Vec<usize>> {
+    pub fn outcome(&self) -> Option<Vec<f64>> {
         if !self.is_terminal() {
             return None;
         }
@@ -314,11 +314,19 @@ impl GameState {
             .map(|player| {
                 let elimination_at = player.eliminated_at.unwrap_or(usize::MAX);
 
-                1 + self
+                let tied_rank = 1 + self
                     .players
                     .iter()
                     .filter(|other| other.eliminated_at.unwrap_or(usize::MAX) > elimination_at)
-                    .count()
+                    .count();
+
+                let tied_players_count = self
+                    .players
+                    .iter()
+                    .filter(|other| other.eliminated_at.unwrap_or(usize::MAX) == elimination_at)
+                    .count();
+
+                tied_rank as f64 + 0.5 * (tied_players_count - 1) as f64
             })
             .collect();
 
@@ -2082,7 +2090,7 @@ mod tests {
             game_state.players[2].eliminated_at = Some(3);
             game_state.alive_count = 1;
 
-            assert_eq!(game_state.outcome(), Some(vec![4, 3, 2, 1]));
+            assert_eq!(game_state.outcome(), Some(vec![4., 3., 2., 1.]));
         }
 
         #[test]
@@ -2094,7 +2102,7 @@ mod tests {
             game_state.players[2].eliminated_at = Some(2);
             game_state.alive_count = 1;
 
-            assert_eq!(game_state.outcome(), Some(vec![4, 2, 2, 1]));
+            assert_eq!(game_state.outcome(), Some(vec![4., 2.5, 2.5, 1.]));
         }
 
         #[test]
@@ -2107,7 +2115,7 @@ mod tests {
             game_state.players[3].eliminated_at = Some(3);
             game_state.alive_count = 0;
 
-            assert_eq!(game_state.outcome(), Some(vec![3, 3, 1, 1]));
+            assert_eq!(game_state.outcome(), Some(vec![3.5, 3.5, 1.5, 1.5]));
         }
     }
 }
