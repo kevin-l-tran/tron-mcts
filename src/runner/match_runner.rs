@@ -13,7 +13,6 @@ pub struct RunConfig {
     pub max_ticks: usize,
     pub decision_budget: SearchBudget,
     pub record_replay: bool,
-    pub seed: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -175,7 +174,6 @@ mod tests {
             max_ticks: 100,
             decision_budget: SearchBudget::Simulations(100),
             record_replay,
-            seed: 42,
         }
     }
 
