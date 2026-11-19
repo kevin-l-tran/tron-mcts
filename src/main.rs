@@ -3,15 +3,11 @@ use std::sync::Arc;
 use rand::{SeedableRng, rngs::ChaCha8Rng};
 use tron_mcts::{
     agents::{
-        interface::{Agent, AgentContext, SearchBudget},
-        random::SafeRandomAgent,
-    },
-    engine::generate::{ArenaConfig, SpawnConfig, generate_arena, generate_spawns},
-    runner::{
+        interface::{Agent, AgentContext, SearchBudget}, simple::SimpleAgent,
+    }, engine::generate::{ArenaConfig, SpawnConfig, generate_arena, generate_spawns}, runner::{
         match_runner::{MatchRunner, RunConfig},
         replay::Replay,
-    },
-    visualizer::run,
+    }, visualizer::run,
 };
 
 fn demo_replay() -> Replay {
@@ -39,7 +35,7 @@ fn demo_replay() -> Replay {
     .expect("spawn generation should succeed");
 
     let agents: Vec<Box<dyn Agent>> = (0..spawns.len())
-        .map(|_| Box::new(SafeRandomAgent) as Box<dyn Agent>)
+        .map(|_| Box::new(SimpleAgent) as Box<dyn Agent>)
         .collect();
 
     let contexts = (0..spawns.len())

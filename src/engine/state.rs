@@ -128,7 +128,7 @@ impl GameState {
                 continue;
             };
 
-            if !self.arena.in_bounds(player_x, player_y) || self.is_occupied(player_x, player_y) {
+            if self.is_occupied(player_x, player_y) {
                 continue;
             }
 
@@ -332,13 +332,13 @@ impl GameState {
         Some(ranks)
     }
 
+    pub fn is_occupied(&self, x: usize, y: usize) -> bool {
+        !self.arena.in_bounds(x, y) || self.trails[(x, y)] != 0 || self.arena[(x, y)]
+    }
+
     fn set_trail(&mut self, x: usize, y: usize, id: usize) {
         debug_assert!(id < self.players.len());
         self.trails[(x, y)] = (id + 1) as u8;
-    }
-
-    fn is_occupied(&self, x: usize, y: usize) -> bool {
-        self.arena.in_bounds(x, y) && (self.trails[(x, y)] != 0 || self.arena[(x, y)])
     }
 }
 
