@@ -332,14 +332,6 @@ impl GameState {
         Some(ranks)
     }
 
-    fn trail_owner(&self, x: usize, y: usize) -> Option<usize> {
-        if self.trails[(x, y)] == 0 {
-            None
-        } else {
-            Some(self.trails[(x, y)] as usize - 1)
-        }
-    }
-
     fn set_trail(&mut self, x: usize, y: usize, id: usize) {
         debug_assert!(id < self.players.len());
         self.trails[(x, y)] = (id + 1) as u8;

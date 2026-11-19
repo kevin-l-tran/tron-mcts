@@ -9,9 +9,9 @@ use crate::engine::{
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArenaConfig {
-    width: usize,
-    height: usize,
-    obstacle_density: f64,
+    pub width: usize,
+    pub height: usize,
+    pub obstacle_density: f64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -54,11 +54,11 @@ pub fn generate_arena(
 
 #[derive(Clone, Copy, Debug)]
 pub struct SpawnConfig {
-    player_count: u8,
-    min_spawn_distance: usize,
-    min_boundary_distance: usize,
-    min_reachable_region_proportion: f64,
-    max_attempts: Option<usize>,
+    pub player_count: u8,
+    pub min_spawn_distance: usize,
+    pub min_boundary_distance: usize,
+    pub min_reachable_region_proportion: f64,
+    pub max_attempts: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -120,6 +120,7 @@ pub fn generate_spawns(
         let mut queue = VecDeque::from([(spawn_x, spawn_y)]);
         let mut visited = HashSet::from([(spawn_x, spawn_y)]);
 
+        // bfs search
         while !queue.is_empty() {
             let (x, y) = queue.pop_front().unwrap();
             let deltas = [North, South, East, West].map(|d| d.delta());
