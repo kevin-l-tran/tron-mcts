@@ -13,3 +13,7 @@ divan = "0.1.21"
 [[bench]]
 name = "simulator"
 harness = false
+
+[[bench]]
+name = "engine"
+harness = false
