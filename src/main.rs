@@ -71,5 +71,5 @@ fn demo_replay() -> Replay {
 }
 
 fn main() -> eframe::Result {
-    run(demo_replay())
+    run(demo_replay)
 }

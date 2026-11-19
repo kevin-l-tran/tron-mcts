@@ -7,6 +7,7 @@ use super::board::player_color;
 pub(super) const SPEEDS: [f32; 7] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 60.0];
 
 pub(super) enum Command {
+    NewGame,
     PlayPause,
     First,
     Previous,
@@ -63,10 +64,15 @@ pub(super) fn draw_playback(
                     ui.selectable_value(speed_index, index, format!("{} ticks/s", *speed as usize));
                 }
             });
+
+        ui.separator();
+        if ui.button("New Game").clicked() {
+            command = Some(Command::NewGame);
+        }
     });
 
     ui.label(
-        RichText::new("Space: play/pause  |  Left/Right: step  |  Up/Down: speed  |  R: restart")
+        RichText::new("Space: play/pause  |  Left/Right: step  |  Up/Down: speed  |  R: restart | N: new game")
             .small()
             .weak(),
     );

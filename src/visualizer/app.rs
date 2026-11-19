@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Key};
 
-use crate::runner::replay::ReplayPlayer;
+use crate::runner::replay::{Replay, ReplayPlayer};
 
 use super::{
     board,
@@ -11,6 +11,7 @@ use super::{
 
 pub(super) struct VisualizerApp {
     player: ReplayPlayer,
+    replay_factory: fn() -> Replay,
     playing: bool,
     speed_index: usize,
     elapsed: f32,
@@ -19,15 +20,27 @@ pub(super) struct VisualizerApp {
 }
 
 impl VisualizerApp {
-    pub(super) fn new(player: ReplayPlayer) -> Self {
+    pub(super) fn new(player: ReplayPlayer, replay_factory: fn() -> Replay) -> Self {
         Self {
             player,
+            replay_factory,
             playing: false,
             speed_index: 4,
             elapsed: 0.0,
             last_update: Instant::now(),
             error: None,
         }
+    }
+
+    fn new_game(&mut self) {
+        let replay = (self.replay_factory)();
+        let player = ReplayPlayer::new(replay).expect("replay factory should create valid replays");
+
+        self.player = player;
+        self.playing = true;
+        self.elapsed = 0.0;
+        self.last_update = Instant::now();
+        self.error = None;
     }
 
     fn seek(&mut self, tick: usize) -> bool {
@@ -61,6 +74,7 @@ impl VisualizerApp {
         self.last_update = Instant::now();
 
         match command {
+            Command::NewGame => self.new_game(),
             Command::PlayPause => {
                 if !self.playing
                     && (self.player.tick() == self.player.total_ticks()
@@ -100,7 +114,9 @@ impl VisualizerApp {
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         let command = ctx.input(|input| {
-            if input.key_pressed(Key::Space) {
+            if input.key_pressed(Key::N) {
+                Some(Command::NewGame)
+            } else if input.key_pressed(Key::Space) {
                 Some(Command::PlayPause)
             } else if input.key_pressed(Key::ArrowRight) || input.key_pressed(Key::D) {
                 Some(Command::Next)
