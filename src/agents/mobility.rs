@@ -41,7 +41,7 @@ impl Agent for MobilityAgent {
                 .safe_actions(player_id)
                 .expect("expected player_id to be valid");
 
-            if project_safe_actions.len() > max_safety.0 {
+            if project_safe_actions.len() >= max_safety.0 {
                 max_safety = (project_safe_actions.len(), Some(action));
             }
 
