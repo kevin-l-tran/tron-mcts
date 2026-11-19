@@ -1,3 +1,5 @@
+use rand::seq::SliceRandom;
+
 use crate::{
     agents::interface::{Agent, AgentContext, AgentDecision},
     engine::state::GameState,
@@ -11,13 +13,16 @@ impl Agent for MobilityAgent {
         &mut self,
         state: &GameState,
         player_id: usize,
-        _context: &mut AgentContext,
+        context: &mut AgentContext,
     ) -> AgentDecision {
         let mut temp_state = state.clone();
-        
-        let safe_actions = temp_state
+
+        let mut safe_actions = temp_state
             .safe_actions(player_id)
             .expect("expected player_id to be valid");
+
+        // shuffle actions so agent doesn't always choose same direction
+        safe_actions.shuffle(&mut context.rng);
 
         let mut max_safety = (0, None);
         let mut simulation_count = 0;
