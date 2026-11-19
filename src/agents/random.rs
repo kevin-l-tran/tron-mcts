@@ -5,6 +5,7 @@ use crate::{
     engine::{action::Action, state::GameState},
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RandomAgent;
 
 impl Agent for RandomAgent {
@@ -24,6 +25,7 @@ impl Agent for RandomAgent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct SafeRandomAgent;
 
 impl Agent for SafeRandomAgent {

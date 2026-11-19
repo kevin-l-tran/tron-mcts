@@ -3,6 +3,7 @@ use crate::{
     engine::{action::Action, state::GameState},
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct SimpleAgent;
 
 impl Agent for SimpleAgent {
@@ -13,27 +14,27 @@ impl Agent for SimpleAgent {
         _context: &mut AgentContext,
     ) -> AgentDecision {
         let player = state.players[player_id];
-        let safe_action = state
+        let safe_actions = state
             .safe_actions(player_id)
             .expect("expected player_id to be valid");
 
-        if safe_action.is_empty() {
+        if safe_actions.is_empty() {
             AgentDecision {
                 action: None,
                 simulation_count: 0,
             }
-        } else if safe_action.contains(&Action::Straight) {
+        } else if safe_actions.contains(&Action::Straight) {
             AgentDecision {
                 action: Some(Action::Straight),
                 simulation_count: 0,
             }
         } else {
-            if !safe_action.contains(&Action::Left) {
+            if !safe_actions.contains(&Action::Left) {
                 return AgentDecision {
                     action: Some(Action::Right),
                     simulation_count: 0,
                 };
-            } else if !safe_action.contains(&Action::Right) {
+            } else if !safe_actions.contains(&Action::Right) {
                 return AgentDecision {
                     action: Some(Action::Left),
                     simulation_count: 0,
@@ -44,6 +45,8 @@ impl Agent for SimpleAgent {
             let (r_dx, r_dy) = Action::Right.apply_to_direction(player.direction).delta();
 
             let (x, y) = (player.x, player.y);
+
+            // actions are safe so conversions should be safe
             let (mut l_x, mut l_y) = ((x as isize + l_dx) as usize, (y as isize + l_dy) as usize);
             let (mut r_x, mut r_y) = ((x as isize + r_dx) as usize, (y as isize + r_dy) as usize);
 
