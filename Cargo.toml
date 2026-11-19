@@ -6,3 +6,10 @@ edition = "2024"
 [dependencies]
 eframe = "0.37.0"
 rand = { version = "0.10.4", features = ["chacha"] }
+
+[dev-dependencies]
+divan = "0.1.21"
+
+[[bench]]
+name = "simulator"
+harness = false
