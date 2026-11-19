@@ -4,7 +4,7 @@ use crate::{engine::state::GameState, runner::replay::ReplayPlayer};
 
 use super::board::player_color;
 
-pub(super) const SPEEDS: [f32; 7] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 60.0];
+pub(super) const SPEEDS: [f32; 9] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 60.0, 90.0, 120.0];
 
 pub(super) enum Command {
     NewGame,
