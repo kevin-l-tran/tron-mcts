@@ -58,6 +58,14 @@ impl<T> Grid<T> {
     pub fn flat_index(&self, x: usize, y: usize) -> usize {
         y * self.width + x
     }
+
+    pub fn index(&self, index: usize) -> (usize, usize) {
+        (index % self.width, index / self.width)
+    }
+
+    pub fn size(&self) -> usize {
+        self.width * self.height
+    }
 }
 
 impl<T: Clone> Grid<T> {
@@ -234,7 +242,7 @@ mod tests {
 
     mod clone {
         use super::*;
-        
+
         #[test]
         fn copies_cell_storage() {
             let original = Grid::filled(3, 2, 1);
