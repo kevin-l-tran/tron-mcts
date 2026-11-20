@@ -1,16 +1,27 @@
-use std::sync::Arc;
+use std::{
+    sync::{
+        Arc,
+        mpsc::{Receiver, channel},
+    },
+    thread,
+    time::Duration,
+};
 
 use rand::{SeedableRng, rngs::ChaCha8Rng};
 use tron_mcts::{
     agents::{
-        interface::{Agent, AgentContext, SearchBudget}, mobility::MobilityAgent,
-    }, engine::generate::{ArenaConfig, SpawnConfig, generate_arena, generate_spawns}, runner::{
+        interface::{Agent, AgentContext, SearchBudget},
+        voronoi::VoronoiAgent,
+    },
+    engine::generate::{ArenaConfig, SpawnConfig, generate_arena, generate_spawns},
+    runner::{
         match_runner::{MatchRunner, RunConfig},
         replay::Replay,
-    }, visualizer::run,
+    },
+    visualizer::{app::MatchEvent, run},
 };
 
-fn demo_replay() -> Replay {
+fn start_demo_match() -> (Replay, Receiver<MatchEvent>) {
     let arena = generate_arena(
         &ArenaConfig {
             width: 80,
@@ -34,38 +45,59 @@ fn demo_replay() -> Replay {
     )
     .expect("spawn generation should succeed");
 
-    let agents: Vec<Box<dyn Agent>> = (0..spawns.len())
-        .map(|_| Box::new(MobilityAgent) as Box<dyn Agent>)
-        .collect();
-
     let contexts = (0..spawns.len())
         .map(|id| AgentContext {
             rng: ChaCha8Rng::seed_from_u64(1234 + id as u64),
-            budget: SearchBudget::Simulations(0),
+            budget: SearchBudget::Time(Duration::new(0, 100_000_000)),
         })
         .collect();
 
     let arena = Arc::new(arena);
-    let mut match_runner = MatchRunner::new(
-        Arc::clone(&arena),
-        spawns.clone(),
-        agents,
-        contexts,
-        RunConfig {
-            max_ticks: 1500,
-            record_replay: true,
-        },
-    )
-    .expect("demo scenario must be valid");
 
-    let result = match_runner.run().expect("demo match should finish");
-    Replay {
-        arena,
-        spawns,
-        frames: result.replay.expect("replay recording is enabled"),
-    }
+    let t_arena = arena.clone();
+    let t_spawns = spawns.clone();
+    let (tx, rx) = channel();
+
+    thread::spawn(move || {
+        let agents: Vec<Box<dyn Agent>> = (0..t_spawns.len())
+            .map(|_| Box::new(VoronoiAgent) as Box<dyn Agent>)
+            .collect();
+
+        let mut match_runner = MatchRunner::new(
+            Arc::clone(&t_arena),
+            t_spawns,
+            agents,
+            contexts,
+            RunConfig {
+                max_ticks: 1500,
+                record_replay: true,
+            },
+        )
+        .expect("demo scenario must be valid");
+
+        let result = match_runner.run_with_callback(|frame| {
+            tx.send(MatchEvent::Frame(frame))
+                .expect("receiver should exist")
+        });
+
+        let event = match result {
+            Ok(_) => MatchEvent::Finished,
+            Err(err) => MatchEvent::Error(err),
+        };
+
+        let _ = tx.send(event);
+    });
+
+    (
+        Replay {
+            arena,
+            spawns,
+            frames: vec![],
+        },
+        rx,
+    )
 }
 
 fn main() -> eframe::Result {
-    run(demo_replay)
+    run(start_demo_match)
 }

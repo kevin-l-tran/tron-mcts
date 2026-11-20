@@ -1,17 +1,31 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::{Receiver, TryRecvError},
+    time::{Duration, Instant},
+};
 
 use eframe::egui::{self, Key};
 
-use crate::runner::replay::{Replay, ReplayPlayer};
+use crate::runner::{
+    match_runner::{MatchRunnerError, ReplayFrame},
+    replay::{Replay, ReplayPlayer},
+};
 
 use super::{
     board,
     controls::{self, Command, SPEEDS},
 };
 
+pub enum MatchEvent {
+    Frame(ReplayFrame),
+    Error(MatchRunnerError),
+    Finished,
+}
+
 pub(super) struct VisualizerApp {
+    replay_factory: fn() -> (Replay, Receiver<MatchEvent>),
+    receiver: Option<Receiver<MatchEvent>>,
     player: ReplayPlayer,
-    replay_factory: fn() -> Replay,
+    live: bool,
     playing: bool,
     speed_index: usize,
     elapsed: f32,
@@ -20,10 +34,16 @@ pub(super) struct VisualizerApp {
 }
 
 impl VisualizerApp {
-    pub(super) fn new(player: ReplayPlayer, replay_factory: fn() -> Replay) -> Self {
+    pub(super) fn new(replay_factory: fn() -> (Replay, Receiver<MatchEvent>)) -> Self {
+        let (replay, receiver) = replay_factory();
+        let player =
+            ReplayPlayer::new(replay).expect("replay factory must construct a valid initial state");
+
         Self {
             player,
             replay_factory,
+            receiver: Some(receiver),
+            live: true,
             playing: false,
             speed_index: 4,
             elapsed: 0.0,
@@ -33,11 +53,13 @@ impl VisualizerApp {
     }
 
     fn new_game(&mut self) {
-        let replay = (self.replay_factory)();
-        let player = ReplayPlayer::new(replay).expect("replay factory should create valid replays");
+        let (replay, receiver) = (self.replay_factory)();
+        let player = ReplayPlayer::new(replay).expect("replay should be valid");
 
         self.player = player;
-        self.playing = true;
+        self.receiver = Some(receiver);
+        self.live = true;
+        self.playing = false;
         self.elapsed = 0.0;
         self.last_update = Instant::now();
         self.error = None;
@@ -70,6 +92,10 @@ impl VisualizerApp {
     }
 
     fn command(&mut self, command: Command) {
+        if self.live {
+            return;
+        }
+
         self.elapsed = 0.0;
         self.last_update = Instant::now();
 
@@ -113,6 +139,10 @@ impl VisualizerApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        if self.live {
+            return;
+        }
+
         let command = ctx.input(|input| {
             if input.key_pressed(Key::N) {
                 Some(Command::NewGame)
@@ -144,6 +174,59 @@ impl VisualizerApp {
     }
 
     fn update_playback(&mut self, ctx: &egui::Context) {
+        if self.live {
+            self.live_playback(ctx);
+        } else {
+            self.recorded_playback(ctx);
+        }
+    }
+
+    fn live_playback(&mut self, ctx: &egui::Context) {
+        let mut finished = false;
+
+        if let Some(receiver) = &self.receiver {
+            loop {
+                match receiver.try_recv() {
+                    Ok(MatchEvent::Frame(frame)) => self.player.append_frame(frame),
+                    Ok(MatchEvent::Finished) => {
+                        finished = true;
+                        break;
+                    }
+                    Ok(MatchEvent::Error(error)) => {
+                        self.error = Some(format!("Match runner failed: {error:?}"));
+                        finished = true;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.error = Some("Match runner disconnected unexpectedly".to_owned());
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+        } else {
+            self.error = Some("Live match receiver is missing".to_owned());
+            finished = true;
+        }
+
+        if let Err(error) = self.player.seek(self.player.total_ticks()) {
+            self.error = Some(format!("Could not advance live replay: {error:?}"));
+            finished = true;
+        }
+
+        if finished {
+            self.live = false;
+            self.receiver = None;
+            self.playing = false;
+            self.elapsed = 0.0;
+            self.last_update = Instant::now();
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+    }
+
+    fn recorded_playback(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         let delta = now.duration_since(self.last_update).as_secs_f32().min(0.25);
         self.last_update = now;
@@ -179,7 +262,11 @@ impl eframe::App for VisualizerApp {
         self.update_playback(&ctx);
 
         egui::Panel::top("header").resizable(false).show(ui, |ui| {
-            ui.heading("TRON / REPLAY");
+            ui.heading(if self.live {
+                "TRON / LIVE"
+            } else {
+                "TRON / REPLAY"
+            });
             ui.label(format!(
                 "Tick {} / {}   |   {} alive",
                 self.player.tick(),
@@ -191,8 +278,12 @@ impl eframe::App for VisualizerApp {
         let command = egui::Panel::bottom("playback")
             .resizable(false)
             .show(ui, |ui| {
-                let command =
-                    controls::draw_playback(ui, &self.player, self.playing, &mut self.speed_index);
+                let command = if self.live {
+                    ui.label("Match running — displaying latest available tick");
+                    None
+                } else {
+                    controls::draw_playback(ui, &self.player, self.playing, &mut self.speed_index)
+                };
                 if let Some(error) = &self.error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }

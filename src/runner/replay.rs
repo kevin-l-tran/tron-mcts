@@ -83,6 +83,10 @@ impl ReplayPlayer {
         }
         Ok(())
     }
+
+    pub fn append_frame(&mut self, frame: ReplayFrame) {
+        self.replay.frames.push(frame);
+    }
 }
 
 #[cfg(test)]

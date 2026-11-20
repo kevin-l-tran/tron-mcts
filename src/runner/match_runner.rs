@@ -107,12 +107,12 @@ impl MatchRunner {
         })
     }
 
-    pub fn step(&mut self) -> Result<(), MatchRunnerError> {
+    pub fn step(&mut self) -> Result<Vec<Option<Action>>, MatchRunnerError> {
         if self.termination_reason().is_some() {
             return Err(MatchRunnerError::GameTerminated);
         }
 
-        let mut actions = vec![];
+        let mut actions = Vec::with_capacity(self.agents.len());
 
         for (id, agent) in self.agents.iter_mut().enumerate() {
             // skip dead agents
@@ -144,10 +144,31 @@ impl MatchRunner {
 
         // update replay frames
         if let Some(replay) = &mut self.replay {
-            replay.push(actions);
+            replay.push(actions.clone());
         }
 
-        Ok(())
+        Ok(actions)
+    }
+
+    pub fn run_with_callback(
+        &mut self,
+        mut callback: impl FnMut(ReplayFrame),
+    ) -> Result<MatchResult, MatchRunnerError> {
+        while self.termination_reason().is_none() {
+            let frame = self.step()?;
+            callback(frame);
+        }
+
+        let termination_reason = self.termination_reason().unwrap();
+
+        Ok(MatchResult {
+            final_state: self.state.clone(),
+            ticks: self.state.tick,
+            ranks: self.state.outcome(),
+            termination: termination_reason,
+            agent_stats: self.agent_stats.clone(),
+            replay: self.replay.clone(),
+        })
     }
 
     pub fn run(&mut self) -> Result<MatchResult, MatchRunnerError> {
@@ -518,7 +539,7 @@ mod tests {
         fn advances_game_by_one_tick() {
             let mut runner = test_runner(false);
 
-            assert_eq!(runner.step(), Ok(()));
+            assert!(runner.step().is_ok());
 
             assert_eq!(runner.state.tick, 1);
             assert_eq!(
