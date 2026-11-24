@@ -9,15 +9,17 @@ pub type NodeId = u32;
 
 pub struct SearchNode {
     visits: u32,
-    action_stats: Vec<[ActionStats; 3]>, // one action stat per movement option
+    action_stats: Vec<Option<[ActionStats; 3]>>, // one action stat per movement option
     outgoing_edges: Vec<EdgeId>,
     parent_edge: Option<EdgeId>,
 }
 
 pub type EdgeId = u32;
 
+pub type JointAction = Vec<Option<Action>>;
+
 pub struct SearchEdge {
-    action: Vec<Action>,
+    action: JointAction,
     child: NodeId,
 }
 
