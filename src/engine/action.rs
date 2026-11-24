@@ -73,6 +73,14 @@ pub enum Action {
 impl Action {
     pub const VALUES: [Self; 3] = [Self::Straight, Self::Left, Self::Right];
 
+    pub fn value_index(&self) -> usize {
+        match self {
+            Self::Straight => 0,
+            Self::Left => 1,
+            Self::Right => 2,
+        }
+    }
+
     pub fn apply_to_direction(self, current_direction: Direction) -> Direction {
         match current_direction {
             Direction::North => match self {
