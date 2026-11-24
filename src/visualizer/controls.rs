@@ -13,6 +13,7 @@ pub(super) enum Command {
     Previous,
     Next,
     Last,
+    Restart,
     Seek(usize),
 }
 

@@ -115,6 +115,10 @@ impl VisualizerApp {
                 self.playing = false;
                 self.seek(0);
             }
+            Command::Restart => {
+                self.playing = true;
+                self.seek(0);
+            }
             Command::Previous => {
                 self.playing = false;
                 if let Err(error) = self.player.step_backward() {
@@ -153,7 +157,7 @@ impl VisualizerApp {
             } else if input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::A) {
                 Some(Command::Previous)
             } else if input.key_pressed(Key::R) {
-                Some(Command::First)
+                Some(Command::Restart)
             } else {
                 None
             }
