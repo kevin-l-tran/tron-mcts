@@ -1,8 +1,30 @@
 use crate::engine::action::Action;
 
 pub struct ActionStats {
-    visits: u32,
-    reward_sum: f64,
+    pub visits: u32,
+    pub reward_sum: f64,
+}
+
+impl ActionStats {
+    pub fn empty() -> ActionStats {
+        ActionStats {
+            visits: 0,
+            reward_sum: 0.0,
+        }
+    }
+
+    pub fn mean_reward(&self) -> f64 {
+        if self.visits == 0 {
+            0.0
+        } else {
+            self.reward_sum / self.visits as f64
+        }
+    }
+
+    pub fn observe(&mut self, reward: f64) {
+        self.visits += 1;
+        self.reward_sum += reward;
+    }
 }
 
 pub type NodeId = u32;
