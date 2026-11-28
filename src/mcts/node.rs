@@ -4,9 +4,18 @@ use crate::engine::{action::Action, state::GameState};
 pub struct ActionStats {
     pub visits: u32,
     pub reward_sum: f64,
+    pub reward_squared_sum: f64,
 }
 
 impl ActionStats {
+    pub fn new(visits: u32, sum: f64, squared_sum: f64) -> ActionStats {
+        ActionStats {
+            visits,
+            reward_sum: sum,
+            reward_squared_sum: squared_sum,
+        }
+    }
+
     pub fn mean_reward(&self) -> f64 {
         if self.visits == 0 {
             0.0
@@ -18,6 +27,7 @@ impl ActionStats {
     pub fn observe(&mut self, reward: f64) {
         self.visits += 1;
         self.reward_sum += reward;
+        self.reward_squared_sum += reward * reward;
     }
 }
 
@@ -26,6 +36,7 @@ impl Default for ActionStats {
         Self {
             visits: 0,
             reward_sum: 0.0,
+            reward_squared_sum: 0.0,
         }
     }
 }
