@@ -1,6 +1,4 @@
-use std::num;
-
-use crate::engine::action::Action;
+use crate::engine::{action::Action, state::GameState};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ActionStats {
@@ -89,12 +87,94 @@ pub type EdgeId = u32;
 pub type JointAction = Vec<Option<Action>>;
 
 pub struct SearchEdge {
-    action: JointAction,
-    child: NodeId,
+    pub action: JointAction,
+    pub child: NodeId,
 }
 
 pub struct SearchTree {
-    root: NodeId,
-    nodes: Vec<SearchNode>,
-    edges: Vec<SearchEdge>,
+    pub root: NodeId,
+    pub nodes: Vec<SearchNode>,
+    pub edges: Vec<SearchEdge>,
+}
+
+impl SearchTree {
+    pub fn new(game_state: &GameState) -> SearchTree {
+        let root = SearchNode::new(
+            game_state.players.len(),
+            &game_state
+                .dead_players()
+                .map(|(id, _)| id)
+                .collect::<Vec<usize>>(),
+            None,
+        );
+        let nodes = vec![root];
+        let edges = vec![];
+
+        SearchTree {
+            root: 0,
+            nodes,
+            edges,
+        }
+    }
+
+    pub fn find_edge(&self, parent_node_id: NodeId, action: &JointAction) -> Option<EdgeId> {
+        let node = &self.nodes[parent_node_id as usize];
+
+        node.outgoing_edges
+            .iter()
+            .find(|&&id| &self.edges[id as usize].action == action)
+            .copied()
+    }
+
+    pub fn add_child(
+        &mut self,
+        parent_node_id: NodeId,
+        action: &JointAction,
+        child_game_state: &GameState,
+    ) {
+        debug_assert!(
+            self.find_edge(parent_node_id, action).is_none(),
+            "duplicate joint action"
+        );
+
+        let new_node_id = self.nodes.len();
+        let new_edge_id = self.edges.len();
+
+        let new_edge = SearchEdge {
+            action: action.clone(),
+            child: new_node_id as u32,
+        };
+
+        let new_node = SearchNode::new(
+            child_game_state.players.len(),
+            &child_game_state
+                .dead_players()
+                .map(|(id, _)| id)
+                .collect::<Vec<usize>>(),
+            Some(parent_node_id),
+        );
+
+        self.edges.push(new_edge);
+        self.nodes.push(new_node);
+
+        let node = &mut self.nodes[parent_node_id as usize];
+        node.outgoing_edges.push(new_edge_id as u32);
+    }
+
+    pub fn record_visit(&mut self, node_id: NodeId) {
+        let node = &mut self.nodes[node_id as usize];
+
+        node.visit();
+    }
+
+    pub fn record_action(
+        &mut self,
+        parent_node_id: NodeId,
+        joint_action: &JointAction,
+        reward_vector: &[f64],
+    ) {
+        let node = &mut self.nodes[parent_node_id as usize];
+
+        node.update_stats(joint_action, reward_vector);
+    }
 }

@@ -144,6 +144,13 @@ impl GameState {
             .enumerate()
             .filter(|p| p.1.eliminated_at.is_none())
     }
+    
+    pub fn dead_players(&self) -> impl Iterator<Item = (usize, &PlayerState)> {
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|p| p.1.eliminated_at.is_some())
+    }
 
     pub fn step(&mut self, actions: StepInput) -> Result<UndoRecord, GameStateError> {
         if actions.len() != self.players.len() {
